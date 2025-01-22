@@ -85,8 +85,27 @@ void broadcast(int sender, char *msg, size_t msg_len) {
     }
 }
 
-char* get_alias() {
+
+char *set_alias(Connection *connection, Message *message) {
+    size_t ALIAS_MAX = 12;
     return 0;
+}
+
+
+void handle_message(Connection *connection, Message *message) {
+    switch (message->op) {
+        case TEXT: // send message
+            broadcast(0, message->content, message->len);
+            break;
+        case ALIAS: // set alias
+            set_alias(connection, message);
+            break;
+        case END: // disconnect client
+            break;
+        default:
+            fprintf(stderr, "wrongly formatted message");
+            break;
+    }
 }
 
 
@@ -97,29 +116,26 @@ void *recv_handler(void *connection) {
 
     printf("client connected\n");
 
-    char message[MSG_LEN_MAX];
+    char content[MSG_LEN_MAX];
     int bytes_read = 1;
 
-    /* get alias
-     *  want get alias from user, make struct for message type now
-     *  or differentiate receiving messages from broadcasting
-     * */
     while (1) {
-        memset(message, 0, MSG_LEN_MAX);
-        bytes_read = recv(sd, message, MSG_LEN_MAX, 0);
+        memset(content, 0, MSG_LEN_MAX);
+        bytes_read = recv(sd, content, MSG_LEN_MAX, 0);
         switch (bytes_read) {
-            case 0:
+            case 0: // client disconnected
                 *con_info->sd_loc = 0;
                 connections_count--;
                 free(connection);
                 close(sd);
                 pthread_exit(0);
-            case -1:
+            case -1: // err
                 perror("recv");
                 continue;
-            default:
-                printf("msg: %s\n", message);
-                broadcast(sd, message, bytes_read);
+            default: // handle content of message
+                printf("msg: %s\n", content);
+                // construct Message
+                //handle_message(con_info, message);
                 continue;
         }
     }

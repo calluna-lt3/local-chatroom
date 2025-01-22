@@ -8,6 +8,19 @@
 #define MSG_LEN_MAX 64
 #define CONNECTIONS_MAX 16
 
+// dont have to have check type of information, not gonna be sending binary or anything
+typedef enum {
+    TEXT       = 0x0, // send message
+    ALIAS      = 0x1, // set alias
+    END        = 0x2, // disconnect from server
+} Opcode;
+
+typedef struct {
+    Opcode op;
+    size_t len;
+    char *content;
+} Message;
+
 typedef struct {
     int* sd_loc;
     struct sockaddr_storage addr;

@@ -85,15 +85,25 @@ void broadcast(int sender, char *msg, size_t msg_len) {
     }
 }
 
+char* get_alias() {
+    return 0;
+}
+
 
 /* recvs messages, broadcasts recvd messages */
 void *recv_handler(void *connection) {
     Connection *con_info = (Connection *) connection;
     int sd = *con_info->sd_loc;
 
+    printf("client connected\n");
+
     char message[MSG_LEN_MAX];
     int bytes_read = 1;
 
+    /* get alias
+     *  want get alias from user, make struct for message type now
+     *  or differentiate receiving messages from broadcasting
+     * */
     while (1) {
         memset(message, 0, MSG_LEN_MAX);
         bytes_read = recv(sd, message, MSG_LEN_MAX, 0);

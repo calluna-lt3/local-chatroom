@@ -88,19 +88,20 @@ int main() {
         char *msg = malloc(MSG_LEN_MAX);
         msg = fgets(msg, MSG_LEN_MAX, stdin);
         if (msg == NULL) {
+            // note: triggers when C-d is hit on empty line
             perror("fgets");
             exit(1);
         }
 
         int msg_len = strlen(msg);
         int bytes_sent;
+        // remove newline
+        if (msg[msg_len-1] == '\n') {
+            msg[msg_len-1] = '\0';
+        }
         if ((bytes_sent = send(sd, msg, msg_len, 0)) == -1) {
             perror("send");
             continue;
         }
     }
-
-
-
-
 }

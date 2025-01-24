@@ -1,28 +1,40 @@
 #ifndef PRIMARY_H
 #define PRIMARY_H
 
+#include <stdint.h>
 #include <sys/socket.h>
 
 #define ADDRESS "10.20.8.9" // server address
 #define PORT "8018"
-#define MSG_LEN_MAX 64
-#define CONNECTIONS_MAX 16
+#define CONNECTIONS_MAX 2
+#define DATA_SZ_MAX 128
+#define ALIAS_SZ_MAX 16
 
-// dont have to have check type of information, not gonna be sending binary or anything
+/* can probably be defined at runtime, based on DATA_SZ_MAX and ALIAS_SZ_MAX */
+#define TXT_SZ_MAX 104
+
 typedef enum {
-    TEXT       = 0x0, // send message
-    ALIAS      = 0x1, // set alias
-    END        = 0x2, // disconnect from server
+    HELLO = 0x0, // handshake
+    TEXT  = 0x1, // send message
+    ALIAS = 0x2, // set alias
+    END   = 0x3, // disconnect from server
 } Opcode;
 
-typedef struct {
-    Opcode op;
-    size_t len;
-    char *content;
-} Message;
+typedef enum {
+    UNICAST   = 0x0,
+    BROADCAST = 0x1,
+} Transmission_type;
+
+typedef struct {               // 128 bytes
+    Opcode op;                 //  4
+    char alias[ALIAS_SZ_MAX];  //  16
+    uint32_t txt_sz;           //  4
+    char txt[TXT_SZ_MAX];      //  104
+} Data;
 
 typedef struct {
     int* sd_loc;
+    char alias[ALIAS_SZ_MAX];
     struct sockaddr_storage addr;
     socklen_t addr_sz;
 } Connection;

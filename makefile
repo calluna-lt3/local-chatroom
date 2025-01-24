@@ -1,5 +1,5 @@
 CC     = gcc
-CFLAGS = -g
+CFLAGS = -g -Wall -Werror
 DEPS   = cr.h
 H_OBJ  = cr-server.o
 C_OBJ  = cr-client.o

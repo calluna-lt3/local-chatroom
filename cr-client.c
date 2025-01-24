@@ -8,11 +8,15 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <pthread.h>
+#include <stdint.h>
 #include "cr.h"
 
 
+static char alias[ALIAS_SZ_MAX];
+
+
 int setup_client_socket() {
-    int status, backlog = 5;
+    int status;
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -44,15 +48,71 @@ int setup_client_socket() {
     return sd;
 }
 
+
+void send_data(int sd, Opcode op, char *txt) {
+    Data *data = calloc(DATA_SZ_MAX, sizeof(char));
+    data->op = op;
+    // maybe memset?
+    memcpy(data->alias, alias, ALIAS_SZ_MAX);
+
+    data->txt_sz = strlen(txt);
+    if (data->txt_sz > TXT_SZ_MAX) { // TODO: proper handling
+        fprintf(stderr, "message of size %u too long, set to empty", data->txt_sz);
+        txt = "";
+        data->txt_sz = 1;
+    }
+    memcpy(data->txt, txt, data->txt_sz);
+    size_t data_sz = sizeof(Opcode) + ALIAS_SZ_MAX + sizeof(uint32_t) + data->txt_sz;
+
+    if (send(sd, data, data_sz, 0) == -1) {
+        perror("send");
+    }
+}
+
+
+/* Assumptions
+ * - if opcode is formatted correctly, so is everything else
+ */
+void handle_data(int sd, Data *data_r, size_t data_sz) {
+    switch (data_r->op) {
+        case HELLO: // recv handshake
+            printf("successfully connected to server\n");
+            break;
+        case TEXT: // print message
+            printf("%s: %s\n", data_r->alias, data_r->txt);
+            break;
+        case ALIAS: // set alias
+            // easier if i just do all this locally then send the valid alias to the server
+            if (data_r->txt_sz == 0) {
+                printf("invalid alias, please retry\n");
+            } else {
+                memcpy(alias, data_r->txt, data_r->txt_sz);
+                printf("%u\n", data_r->txt_sz);
+                printf("alias successfully set to: %s\n", alias);
+            }
+            break;
+        case END: // TODO: disconnect client, maybe unnecessary
+            break;
+        default:
+            fprintf(stderr, "data not properly formatted\nHEXDUMP:\n");
+            for (size_t i=0; i<data_sz; i++) {
+                fprintf(stderr, "0x%x ", ((char *) data_r)[i]);
+            }
+            printf("\n");
+            break;
+    }
+}
+
+
 void *recv_handler(void *args) {
     int sd = *(int *) args;
 
-    char message[MSG_LEN_MAX];
+    char data_raw[DATA_SZ_MAX];
     int bytes_read = 1;
 
     while (1) {
-        memset(message, 0, MSG_LEN_MAX);
-        bytes_read = recv(sd, message, MSG_LEN_MAX, 0);
+        memset(data_raw, 0, DATA_SZ_MAX);
+        bytes_read = recv(sd, data_raw, DATA_SZ_MAX, 0);
         switch (bytes_read) {
             case 0:
                 close(sd);
@@ -61,18 +121,17 @@ void *recv_handler(void *args) {
                 perror("recv");
                 continue;
             default:
-                printf("msg: %s\n", message);
+                /* prints bytes of receieved message */
+                handle_data(sd, (Data *)data_raw, bytes_read);
                 continue;
         }
     }
-
-
-    return 0;
 }
+
 
 int main() {
     int sd = setup_client_socket();
-    printf("connected to server\n");
+    printf("attempting to connect to server...\n");
 
     /* recv messages */
     pthread_t tid;
@@ -82,11 +141,34 @@ int main() {
     }
     pthread_detach(tid);
 
+    // handshake
+    send_data(sd, HELLO, "pls respond");
+    sleep(1);
+
+    // ask for alias
+    while (1) {
+        printf("enter alias: ");
+        char *alias = malloc(ALIAS_SZ_MAX);
+        alias = fgets(alias, ALIAS_SZ_MAX, stdin);
+        if (alias == NULL) {
+            // note: triggers when C-d is hit on empty line
+            perror("fgets");
+            exit(1);
+        }
+
+        int alias_len = strlen(alias);
+        if (alias[alias_len-1] == '\n') {
+            alias[alias_len-1] = '\0';
+        }
+        send_data(sd, ALIAS, alias);
+        break;
+    }
+
     /* send messages */
     while (1) {
         printf("> ");
-        char *msg = malloc(MSG_LEN_MAX);
-        msg = fgets(msg, MSG_LEN_MAX, stdin);
+        char *msg = malloc(DATA_SZ_MAX);
+        msg = fgets(msg, DATA_SZ_MAX, stdin);
         if (msg == NULL) {
             // note: triggers when C-d is hit on empty line
             perror("fgets");
@@ -94,14 +176,9 @@ int main() {
         }
 
         int msg_len = strlen(msg);
-        int bytes_sent;
-        // remove newline
         if (msg[msg_len-1] == '\n') {
             msg[msg_len-1] = '\0';
         }
-        if ((bytes_sent = send(sd, msg, msg_len, 0)) == -1) {
-            perror("send");
-            continue;
-        }
+        send_data(sd, TEXT, msg);
     }
 }

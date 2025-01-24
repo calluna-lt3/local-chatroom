@@ -6,20 +6,14 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include "cr.h"
 
 
 static int connections[CONNECTIONS_MAX];
-static int connections_count = 0;
+static sem_t available_connections;
 
 
-/* todo
- *  - implement some sort of protocol so that you can send diff types of
- *    messages, instead of sending chars then printing chars
- *  - fix formatting when sending/receiving messages
- *      - show who sent what message
- *      - allow clients to set an alias
- */
 int setup_server_socket() {
     int status, yes = 1, backlog = 5;
 
@@ -66,76 +60,105 @@ int setup_server_socket() {
 }
 
 
-/* send message to all currently connected clients except the sender
- * parameters
- *  sender: socket descriptor that sent the message (can specify 0 to broadcast to all)
- *  msg: message of size msg_len
- *  msg_len: size of message in bytes
- *
+void send_data(Connection *sender, Opcode op, char *txt, Transmission_type t_type) {
+    Data *data = calloc(DATA_SZ_MAX, sizeof(char));
+    data->op = op;
+
+    data->txt_sz = strlen(txt);
+    if (data->txt_sz > TXT_SZ_MAX) { // TODO: proper handling
+        fprintf(stderr, "message of size %u too long, set to empty", data->txt_sz);
+        txt = "";
+        data->txt_sz = 1;
+    }
+    memcpy(data->txt, txt, data->txt_sz);
+    size_t data_sz = sizeof(Opcode) + ALIAS_SZ_MAX + sizeof(uint32_t) + data->txt_sz;
+
+    switch (t_type) {
+        case UNICAST: // used solely to communicate with sender
+            if (send(*sender->sd_loc, data, data_sz, 0) == -1) {
+                perror("send");
+            }
+            break;
+        case BROADCAST: // send to all but sender
+            for (size_t i=0; i<CONNECTIONS_MAX; i++) {
+                if (connections[i] != 0 && connections[i] != *sender->sd_loc) {
+                    if (send(connections[i], data, data_sz, 0) == -1) {
+                        perror("send");
+                    }
+                }
+            }
+            break;
+    }
+    free(data);
+}
+
+
+/* Assumptions
+ * - if opcode is formatted correctly, so is everything else
  */
-void broadcast(int sender, char *msg, size_t msg_len) {
-    if (msg_len > MSG_LEN_MAX) {
-        fprintf(stderr, "broadcast: message of size %lu is too long, not sent", msg_len);
-        return;
-    }
-    for (size_t i=0; i<CONNECTIONS_MAX; i++) {
-        if (connections[i] != 0 && connections[i] != sender) {
-            send(connections[i], msg, msg_len, 0);
-        }
-    }
-}
-
-
-char *set_alias(Connection *connection, Message *message) {
-    size_t ALIAS_MAX = 12;
-    return 0;
-}
-
-
-void handle_message(Connection *connection, Message *message) {
-    switch (message->op) {
+void handle_data(Connection *connection, Data *data_r, size_t data_sz) {
+    char *message;
+    switch (data_r->op) {
+        case HELLO: // handshake
+            message = "hi";
+            send_data(connection, HELLO, message, UNICAST);
+            break;
         case TEXT: // send message
-            broadcast(0, message->content, message->len);
+            send_data(connection, TEXT, data_r->txt, BROADCAST);
+            printf("msg: %s\n", data_r->txt);
             break;
         case ALIAS: // set alias
-            set_alias(connection, message);
+            /* assumptions
+             * - if alias is successfully set, send alias
+             *   otherwise send empty buffer
+             */
+            if (data_r->txt_sz > ALIAS_SZ_MAX) {
+                // too big
+                message = "";
+            } else {
+                memcpy(connection->alias, data_r->txt, data_r->txt_sz);
+                message = data_r->txt;
+            }
+            send_data(connection, ALIAS, message, UNICAST);
             break;
-        case END: // disconnect client
+        case END: // TODO: disconnect client, maybe unnecessary
             break;
         default:
-            fprintf(stderr, "wrongly formatted message");
+            fprintf(stderr, "data not properly formatted\nHEXDUMP:\n");
+            for (size_t i=0; i<data_sz; i++) {
+                fprintf(stderr, "0x%x ", ((char *) data_r)[i]);
+            }
+            printf("\n");
             break;
     }
+
 }
 
 
-/* recvs messages, broadcasts recvd messages */
 void *recv_handler(void *connection) {
     Connection *con_info = (Connection *) connection;
     int sd = *con_info->sd_loc;
 
     printf("client connected\n");
 
-    char content[MSG_LEN_MAX];
+    char data[DATA_SZ_MAX];
     int bytes_read = 1;
 
     while (1) {
-        memset(content, 0, MSG_LEN_MAX);
-        bytes_read = recv(sd, content, MSG_LEN_MAX, 0);
+        memset(data, 0, DATA_SZ_MAX);
+        bytes_read = recv(sd, data, DATA_SZ_MAX, 0);
         switch (bytes_read) {
             case 0: // client disconnected
-                *con_info->sd_loc = 0;
-                connections_count--;
+                *con_info->sd_loc = 0; // TODO: shared resource, maybe mutex needed (probably not)
+                sem_post(&available_connections);
                 free(connection);
                 close(sd);
                 pthread_exit(0);
             case -1: // err
                 perror("recv");
                 continue;
-            default: // handle content of message
-                printf("msg: %s\n", content);
-                // construct Message
-                //handle_message(con_info, message);
+            default:
+                handle_data(con_info, (Data *) data, bytes_read);
                 continue;
         }
     }
@@ -144,14 +167,14 @@ void *recv_handler(void *connection) {
 
 int main() {
     int sd_server = setup_server_socket();
+    sem_init(&available_connections, 0, CONNECTIONS_MAX);
 
     /* main loop for accepting connections  */
     while (1) {
-        while (connections_count == CONNECTIONS_MAX); /* wait for someone to disconnect */
-        connections_count++; // RACE CONDITION: use semaphore
+        sem_wait(&available_connections);
 
         int sd_con;
-        Connection *cur_con = malloc(sizeof(Connection)); // to be freed in thread
+        Connection *cur_con = malloc(sizeof(Connection)); // to be freed by thread
         if ((sd_con = accept(sd_server, (struct sockaddr *)&cur_con->addr, &cur_con->addr_sz)) == -1) {
             perror("accept");
         }
@@ -172,5 +195,6 @@ int main() {
         }
         pthread_detach(tid);
     } /* end main loop */
+    sem_destroy(&available_connections);
 }
 

@@ -63,6 +63,7 @@ int setup_server_socket() {
 void send_data(Connection *sender, Opcode op, char *txt, Transmission_type t_type) {
     Data *data = calloc(DATA_SZ_MAX, sizeof(char));
     data->op = op;
+    memcpy(data->alias, sender->alias, ALIAS_SZ_MAX);
 
     data->txt_sz = strlen(txt);
     if (data->txt_sz > TXT_SZ_MAX) { // TODO: proper handling
@@ -105,21 +106,18 @@ void handle_data(Connection *connection, Data *data_r, size_t data_sz) {
             break;
         case TEXT: // send message
             send_data(connection, TEXT, data_r->txt, BROADCAST);
-            printf("msg: %s\n", data_r->txt);
+            printf("%s: %s\n", data_r->alias, data_r->txt);
             break;
         case ALIAS: // set alias
-            /* assumptions
-             * - if alias is successfully set, send alias
-             *   otherwise send empty buffer
-             */
+            // should always be valid once it gets here, however do not want segfaults
             if (data_r->txt_sz > ALIAS_SZ_MAX) {
-                // too big
                 message = "";
             } else {
                 memcpy(connection->alias, data_r->txt, data_r->txt_sz);
                 message = data_r->txt;
             }
             send_data(connection, ALIAS, message, UNICAST);
+            printf("user has connected with alias: %s\n", connection->alias);
             break;
         case END: // TODO: disconnect client, maybe unnecessary
             break;
@@ -138,8 +136,6 @@ void handle_data(Connection *connection, Data *data_r, size_t data_sz) {
 void *recv_handler(void *connection) {
     Connection *con_info = (Connection *) connection;
     int sd = *con_info->sd_loc;
-
-    printf("client connected\n");
 
     char data[DATA_SZ_MAX];
     int bytes_read = 1;
@@ -174,7 +170,7 @@ int main() {
         sem_wait(&available_connections);
 
         int sd_con;
-        Connection *cur_con = malloc(sizeof(Connection)); // to be freed by thread
+        Connection *cur_con = calloc(1, sizeof(Connection)); // to be freed by thread
         if ((sd_con = accept(sd_server, (struct sockaddr *)&cur_con->addr, &cur_con->addr_sz)) == -1) {
             perror("accept");
         }
